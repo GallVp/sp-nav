@@ -1,0 +1,485 @@
+---
+title: "SpNav: Statistical Analysis"
+author: "Usman Rashid"
+date: "21/03/2022"
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+output:
+  md_document:
+    variant: gfm
+    toc: yes
+    toc_depth: '4'
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+  word_document:
+    toc: yes
+    toc_depth: '4'
+bibliography: bibliography.bib
+csl: apa.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+```{r data_setup, echo=FALSE, include=FALSE}
+
+# Packages Used:
+require(ggplot2)
+require(lme4)
+require(car)
+require(MASS)
+require(sjstats)
+require(fBasics)
+require(ggpubr)
+require(reshape2)
+require(phia)
+require(emmeans)
+require(multcomp)
+require(jtools)
+require(rsq)
+require(r2glmm)
+require(sjPlot)
+require(MuMIn)
+require(effects)
+require(optimx)
+require(margins)
+require(cAIC4)
+require(ggsignif)
+require(nlme)
+require(ggsci)
+require(lemon)
+require(report)
+require(forcats)
+require(dplyr)
+require(blandr)
+
+knit_print.data.frame <- lemon_print
+
+source('../rscripts/Stats-Helpers.R')
+
+dataSource <- read.csv("./Archive/Sp Nav Raw Data.csv")
+dataSource.a <- dataSource[, seq(1, 10)]
+dataSource.a <- dataSource.a[!is.na(dataSource.a$Trial), ]
+dataSource.b <- dataSource[, c(1, seq(11, 27))]
+dataSource.b <- dataSource.b[!is.na(dataSource.b$IMT), ]
+
+dataSource <- merge(dataSource.a, dataSource.b, by = c("PartID"))
+
+rm(dataSource.a)
+rm(dataSource.b)
+
+# Data selection and transformations
+dataSource$Angle.of.Deviation <- abs(dataSource$Angle.of.Deviation)
+dataSource.all <- dataSource
+dataSource.all$Condition <- as.factor(dataSource.all$PartID > 400)
+dataSource <- dataSource[dataSource$PartID < 400, ]
+
+dataSource$PartID <- as.factor(dataSource$PartID)
+dataSource$Time.Slot <- as.factor(dataSource$Time.Slot)
+dataSource$Time.Period <- as.factor(dataSource$Time.Period)
+dataSource$Is.VR <- as.factor(dataSource$Is.VR)
+dataSource$Is.Clockwise <- as.factor(dataSource$Is.Clockwise)
+dataSource$Is.1m.First <- as.factor(dataSource$Is.1m.First)
+
+dataSource.s <- subset(dataSource, Is.VR == 0)
+dataSource.vr <- subset(dataSource, Is.VR == 1)
+
+dataSource.s.m <- dataSource.s %>% group_by(PartID, Time.Period) %>% summarise(Dist.from.End.m = mean(Dist.from.End),
+                                                                               Angle.of.Deviation.m = mean(Angle.of.Deviation),
+                                                                               Dist.Travelled.m = mean(Dist.Travelled))
+
+dataSource.vr.m <- dataSource.vr %>% group_by(PartID, Time.Period) %>% summarise(Dist.from.End.m = mean(Dist.from.End),
+                                                                                 Angle.of.Deviation.m = mean(Angle.of.Deviation),
+                                                                                 Dist.Travelled.m = mean(Dist.Travelled),
+                                                                                 Floor.Maze.m = mean(Floor.Maze),
+                                                                                 Four.Mountains.m = mean(Four.Mountains),
+                                                                                 IMT.m = mean(IMT),
+                                                                                 DMT.m = mean(DMT),
+                                                                                 SSQ.m = mean(SSQ.Total),
+                                                                                 Quena.m = mean(Quena.Total))
+
+jus<-function(x, n) {
+  return(mean(x[seq(1, n)]))
+}
+
+dataSource.vr.m.r <- dataSource.vr %>% group_by(PartID, Time.Period) %>% summarise(Dist.Travelled.m = jus(Dist.Travelled, 4))
+dataSource.s.m.r <- dataSource.s %>% group_by(PartID, Time.Period) %>% summarise(Dist.Travelled.m = jus(Dist.Travelled, 4))
+
+Data.demographic <- subset(dataSource, Trial == 1)
+
+dataSource$Trial.n <- as.numeric(dataSource$Trial) -  (as.numeric(dataSource$Time.Slot)-1)*6
+
+dataSource$ftlt <- as.factor(as.numeric(dataSource$Trial.n > 3) + 1)
+
+dataSource.vr.m.tpt <- subset(dataSource, Time.Period == 2 & Is.VR == 1) %>% group_by(PartID, ftlt) %>% summarise(Dist.from.End.m = mean(Dist.from.End),
+                                                                                 Angle.of.Deviation.m = mean(Angle.of.Deviation),
+                                                                                 Dist.Travelled.m = mean(Dist.Travelled),
+                                                                                 Floor.Maze.m = mean(Floor.Maze),
+                                                                                 Four.Mountains.m = mean(Four.Mountains),
+                                                                                 IMT.m = mean(IMT),
+                                                                                 DMT.m = mean(DMT),
+                                                                                 SSQ.m = mean(SSQ.Total),
+                                                                                 Quena.m = mean(Quena.Total))
+dataSource.s.m.tpt <- subset(dataSource, Time.Period == 2 & Is.VR == 0) %>% group_by(PartID, ftlt) %>% summarise(Dist.from.End.m = mean(Dist.from.End),
+                                                                                 Angle.of.Deviation.m = mean(Angle.of.Deviation),
+                                                                                 Dist.Travelled.m = mean(Dist.Travelled),
+                                                                                 Floor.Maze.m = mean(Floor.Maze),
+                                                                                 Four.Mountains.m = mean(Four.Mountains),
+                                                                                 IMT.m = mean(IMT),
+                                                                                 DMT.m = mean(DMT),
+                                                                                 SSQ.m = mean(SSQ.Total),
+                                                                                 Quena.m = mean(Quena.Total))
+```
+
+\newpage
+
+# Descriptive Statistics
+
+## Sex
+
+```{r sex, echo=FALSE, include=TRUE, warning=F}
+Data <- present.factor(Data.demographic, "Sex")
+Data$graph
+```
+
+```{r sex_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+## Age
+
+```{r age, echo=FALSE, include=TRUE, warning=F}
+Data <- present.continuous(Data.demographic, "Age", na.rm = T)
+Data$graph
+```
+
+```{r age_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+## SSQ Total
+
+```{r ssq_tot, echo=FALSE, include=TRUE, warning=F}
+Data <- present.continuous(Data.demographic, "SSQ.Total", na.rm = T)
+Data$graph
+```
+
+```{r ssq_tot_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+## SSQ Nausea
+
+```{r ssq_nau, echo=FALSE, include=TRUE, warning=F}
+Data <- present.continuous(Data.demographic, "SSQ.Nausea", na.rm = T)
+Data$graph
+```
+
+```{r ssq_nau_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+## SSQ Occulomotor
+
+```{r ssq_occ, echo=FALSE, include=TRUE, warning=F}
+Data <- present.continuous(Data.demographic, "SSQ.Occulomotor", na.rm = T)
+Data$graph
+```
+
+```{r ssq_occ_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+## SSQ Disorinetation
+
+```{r ssq_dis, echo=FALSE, include=TRUE, warning=F}
+Data <- present.continuous(Data.demographic, "SSQ.Disorinetation", na.rm = T)
+Data$graph
+```
+
+```{r ssq_dis_table, echo=FALSE, include=TRUE, render=lemon_print}
+head(Data$table, n = 100L)
+```
+
+\newpage
+
+# Differences across Test Variables
+
+## Statistical Methods
+
+To evaluate differences across sessions, clockwise/anti-clockwise direction and 1m/2m length, linear mixed effects models are fitted to the data from the standard triangle test and VR triangle test separately [@forR; @forlmefour]. Three outcomes are evaluated: distance from the end, absolute angle of deviation and total distance traveled. These models evaluate the mean differences across these variables while accounting for the repeated measures with random intercepts fitted for individual participants. Normality and homogeneity of variance assumptions are evaluated with QQ-plots and fitted values vs residuals plots. If the model assumptions are violated, data is fitted with generalized linear mixed models with Gamma distribution and identity or log link. Means and mean differences are reported along with their standard errors. Statistical significance threshold is set at 0.05.
+
+## Results Summary
+
+For standard triangle test, the mean distance from end is 49.2 $\pm$ SE 3.4 for session 1. There is statistically significant (z = -2.2, p = 0.03) decrease (-5.8 $\pm$ SE 2.7) in session 2. There are no statistical differences (p > 0.05) across clockwise/anti-clockwise direction or 1m/2m length.
+\par
+For VR triangle test, the mean distance from end is 46 $\pm$ SE 3.5 for session 1. There is statistically significant (z = -2.4, p = 0.016) decrease (-6.8 $\pm$ SE 2.8) in session 2. There are no statistical differences (p > 0.05) across clockwise/anti-clockwise direction or 1m/2m length.
+\par
+For standard triangle test, the mean angle of deviation is 9.1 $\pm$ SE 1.1 for session 1. There are no statistical differences (p > 0.05) across sessions, clockwise/anti-clockwise direction or 1m/2m length.
+\par
+For VR triangle test, the mean angle of deviation is 9.5 $\pm$ SE 1.1 for session 1. There is statistically significant (z = -2.6, p = 0.01) decrease (20% $\pm$ SE 1%) in session 2. There are no statistical differences (p > 0.05) across clockwise/anti-clockwise direction or 1m/2m length.
+\par
+For standard triangle test, the mean distance traveled is 198.7 $\pm$ SE 3.8 for session 1. There is statistically significant (z = 7.4, p < 0.0001) increase (15.9 $\pm$ SE 2.2) in session 2. There are no statistical differences (p > 0.05) across clockwise/anti-clockwise direction or 1m/2m length.
+\par
+For VR triangle test, the mean distance traveled is 220.5 $\pm$ SE 6.6 for session 1. There are no statistical differences (p > 0.05) across sessions, clockwise/anti-clockwise direction or 1m/2m length.
+
+## Distance from End
+
+### Standard Triangle Test
+
+#### Statistical Model
+
+```{r s_diff_mdl, echo=FALSE, comment=NA, warning=FALSE}
+mdl.s <- glmer(Dist.from.End ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+               data = dataSource.s, family = Gamma(link="identity"),
+               control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r s_diff_mdl_summ, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.s)
+```
+
+### VR Triangle Test
+
+#### Statistical Model
+
+```{r vr_diff_mdl, echo=FALSE, comment=NA, warning=FALSE}
+mdl.vr <- glmer(Dist.from.End ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+                data = dataSource.vr, family = Gamma(link="identity"),
+                control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r vr_diff_mdl_summ, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.vr)
+```
+
+\newpage
+
+## Angle of Deviation
+
+### Standard Triangle Test
+
+#### Statistical Model
+
+```{r s_diff_mdl_aod, echo=FALSE, comment=NA, warning=FALSE}
+mdl.s <- glmer(Angle.of.Deviation ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+               data = dataSource.s, family = Gamma(link="log"),
+               control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r s_diff_mdl_aod_sum, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.s)
+```
+
+### VR Triangle Test
+
+#### Statistical Model
+
+```{r vr_diff_mdl_aod, echo=FALSE, comment=NA, warning=FALSE}
+mdl.vr <- glmer(Angle.of.Deviation ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+                data = dataSource.vr, family = Gamma(link="log"),
+                control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r vr_diff_mdl_aod_sum, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.vr)
+```
+
+\newpage
+
+## Distance Travelled
+
+### Standard Triangle Test
+
+#### Statistical Model
+
+```{r s_diff_mdl_dt, echo=FALSE, comment=NA, warning=FALSE}
+mdl.s <- glmer(Dist.Travelled ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+               data = dataSource.s, family = Gamma(link="identity"),
+               control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r s_diff_mdl_dt_sum, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.s)
+```
+
+### VR Triangle Test
+
+#### Statistical Model
+
+```{r vr_diff_mdl_dt, echo=FALSE, comment=NA, warning=FALSE}
+mdl.vr <- glmer(Dist.Travelled ~ Time.Period + Is.Clockwise + Is.1m.First + (1|PartID),
+                data = dataSource.vr, family = Gamma(link="identity"),
+                control = glmerControl(optimizer = c("bobyqa")))
+```
+
+#### Model Summary
+
+```{r vr_diff_mdl_dt_sum, echo=FALSE, comment=NA, warning=FALSE}
+summary(mdl.vr)
+```
+
+\newpage
+
+# Test-retest Reliability
+
+## Statistical Methods
+
+Between-session test-retest reliability is assessed separately for the standard triangle test and the VR triangle test. Three outcomes are evaluated: distance from the end, angle of deviation and total distance traveled. Reliability is evaluated for mean of 6 tests from each session with Pearson's product moment correlation. This coefficient is interpreted as the consistency of the instrument across two time points. The magnitude of the coefficient (r) is interpreted as excellent (>0.900), good (0.750–0.899), moderate (0.500–0.749) and poor (<0.500) [@portney2009foundations]. If the reliability for an outcome is moderate or better, it is also assessed for the mean of first 4 tests from the two sessions. Normality of the outcome measures is evaluated with QQ-plots.
+
+## Results Summary
+
+For standard triangle test, with average across six tests, distance from the end and angle of deviation show poor test-retest reliability (r < 0.5). Only the distance traveled metric shows moderate reliability (r=0.55 95% CI [0.23, 0.76]). With the first 4 tests, the reliability for distance traveled is also moderate (r=0.53 95% CI [0.2, 0.75]). 
+
+For VR triangle test, with average across six tests, distance from the end and angle of deviation show poor test-retest reliability (r < 0.5). Only the distance traveled metric shows moderate reliability (r=0.66 95% CI [0.4, 0.83]). With the first 4 tests, the reliability for distance traveled is also moderate (r=0.65 95% CI [0.38, 0.82]).
+
+## Distance from End
+
+### Standard Triangle Test
+
+```{r s_diff_cor, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m, Time.Period == 1)$Dist.from.End.m, y = subset(dataSource.s.m, Time.Period == 2)$Dist.from.End.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+### VR Triangle Test
+
+```{r vr_diff_cor, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.vr.m, Time.Period == 1)$Dist.from.End.m, y = subset(dataSource.vr.m, Time.Period == 2)$Dist.from.End.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+\newpage
+
+## Angle of Deviation
+
+### Standard Triangle Test
+
+```{r s_diff_cor_aod, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m, Time.Period == 1)$Angle.of.Deviation.m, y = subset(dataSource.s.m, Time.Period == 2)$Angle.of.Deviation.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+### VR Triangle Test
+
+```{r vr_diff_cor_aod, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.vr.m, Time.Period == 1)$Angle.of.Deviation.m, y = subset(dataSource.vr.m, Time.Period == 2)$Angle.of.Deviation.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+\newpage
+
+## Distance Travelled
+
+### Standard Triangle Test
+
+```{r s_diff_cor_dt, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m, Time.Period == 1)$Dist.Travelled.m, y = subset(dataSource.s.m, Time.Period == 2)$Dist.Travelled.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+g1 <- ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x") + xlab('') + ylab('Session 2') +
+  scale_x_continuous(limits = c(170, 280), breaks = seq(170, 280, 20)) + scale_y_continuous(limits = c(170, 280), breaks = seq(170, 280, 20))
+```
+
+### Standard Triangle Test (First 4)
+
+```{r s_diff_cor_dt_f1, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m.r, Time.Period == 1)$Dist.Travelled.m, y = subset(dataSource.s.m.r, Time.Period == 2)$Dist.Travelled.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+### VR Triangle Test
+
+```{r vr_diff_cor_dt, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.vr.m, Time.Period == 1)$Dist.Travelled.m, y = subset(dataSource.vr.m, Time.Period == 2)$Dist.Travelled.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+
+g2 <- ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x") + xlab('Distance Travelled (cm) -- Session 1') + ylab('Session 2') +
+  scale_x_continuous(limits = c(170, 280), breaks = seq(170, 280, 20)) + scale_y_continuous(limits = c(170, 280), breaks = seq(170, 280, 20))
+
+gg <- ggarrange(g1, g2, ncol=1, labels = c('A', 'B'))
+```
+
+### VR Triangle Test (First 4)
+
+```{r vr_diff_cor_dt_f1, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.vr.m.r, Time.Period == 1)$Dist.Travelled.m, y = subset(dataSource.vr.m.r, Time.Period == 2)$Dist.Travelled.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x")
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+\newpage
+
+# Convergent Validity
+
+## Statistical Methods
+
+Convergent validity is only assessed for the reliable outcomes across the two instruments. First, the convergence between two instruments is evaluated using Pearson's product moment correlation. The magnitude of the coefficient (r) is interpreted as excellent (>0.900), good (0.750–0.899), moderate (0.500–0.749) and poor (<0.500) [@portney2009foundations]. If the outcomes have moderate or better convergence, their absolute agreement is evaluated with a Bland-Altman plot. In addition to a qualitative assessment of the plot, the bias and limits of agreement are reported. The bias is interpreted as the systematic error between the two instruments. The limits of agreement are interpreted as the range of values which explain 95% of the differences in scores from the two instruments. The limits of agreement include both the systematic difference and the random differences across the two instruments. The percentage limits of agreement are also reported which are obtained by expressing the limits of agreement as a percentage of the mean of scores across the instruments. The absolute maximum of the percentage limits of agreement are interpreted as excellent (0.0–4.9%), good (5.0–9.9%), moderate (10.0–49.9%) and poor (>50.0%) absolute agreement.
+
+## Results Summary
+
+For VR triangle test, with average across six tests from session 1, distance traveled shows show poor convergent validity against distance traveled on the standard vertical test.
+
+For VR triangle test, with average across six tests from session 2, distance traveled shows show moderate convergent validity against distance traveled on the standard vertical test (r=0.64 95% CI [0.37, 0.81]).
+
+## Distance Travelled (Session 1)
+
+```{r val_s_vs_vr, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m, Time.Period == 1)$Dist.Travelled.m, y = subset(dataSource.vr.m, Time.Period == 1)$Dist.Travelled.m)
+ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x") + xlab('Distance Travelled -- Standard Triangle Test') + ylab('Distance Travelled -- VR Triangle Test')
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+## Distance Travelled (Session 2)
+
+```{r val_s_vs_vr_per_two, echo=FALSE, comment=NA, warning=FALSE}
+g.d <- data.frame(x = subset(dataSource.s.m, Time.Period == 2)$Dist.Travelled.m, y = subset(dataSource.vr.m, Time.Period == 2)$Dist.Travelled.m)
+g1 <- ggscatter(g.d, "x", "y") + geom_smooth(method = "lm", formula = "y~x") + xlab('Real World TCT') + ylab('VR TCT') + scale_y_continuous(limits = c(170, 280), breaks = seq(170, 280, 20)) + scale_x_continuous(limits = c(170, 280), breaks = seq(170, 280, 20))
+standard.cor.test(g.d$x, g.d$y, F)
+```
+
+## Absolute Agreement for Distance Travelled (Session 2)
+
+```{r val_s_vs_vr_per_two_abs, echo=FALSE, comment=NA, warning=FALSE}
+g2 <- blandr.draw(subset(dataSource.s.m, Time.Period == 2)$Dist.Travelled.m,
+            subset(dataSource.vr.m, Time.Period == 2)$Dist.Travelled.m, plotTitle = '', plotProportionalBias = T) +
+  xlab('Mean(Real World TCT, VR TCT)') + ylab('Real World TCT - VR TCT')
+
+gg <- ggarrange(g1, g2, ncol=1, labels = c('A', 'B'))
+
+blandr.display.and.draw(subset(dataSource.s.m, Time.Period == 2)$Dist.Travelled.m,
+            subset(dataSource.vr.m, Time.Period == 2)$Dist.Travelled.m)
+```
+
+# References
